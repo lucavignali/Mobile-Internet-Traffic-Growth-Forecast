@@ -1,0 +1,180 @@
+---
+title: "Mobile Internet Traffic Peak Forecast"
+output:
+  html_notebook: default
+  html_document: default
+---
+
+In this paper we apply Time Series Forecasting to predict the growth of the Mobile Internet Traffic of a Mobile Network Operator (MNO). 
+
+The traffic peak is expressed in Gbps and it is a collection of real data from March to October 2016, including 2G, 3G and 4G traffic, more precisely we want to predict the growth of peak hour traffic for capacity planning reasons, in order to answer to the question: When does the MNO need to upgrade equipment like network nodes or monitoring tools before they reach their maximum capacity?
+
+
+
+```{r message=FALSE, echo=FALSE} 
+library(data.table)
+library(xts)
+library(ggplot2)
+library(plotly)
+library(bit64)
+
+# List all files 
+GnGP <- list.files(pattern = "GnGp_IP_Network")
+S <- list.files(pattern = "S_IP_Network")
+S1 <- list.files(pattern = "S1_IP_Network")
+S5S8 <- list.files(pattern = "S5_S8_IP_Network")
+
+IP <- list.files(pattern = "_IP_Network")
+
+Traffic_all <- data.frame()
+Tr_names <- names(as.data.frame(fread(IP[1])))
+
+for(i in IP) {
+        
+        temp <- as.data.frame(fread(i))
+        names(temp) <- Tr_names
+ #       l <- list(Traffic_all, temp)
+        Traffic_all <- base::rbind(Traffic_all,temp)
+}
+
+# Summarise by date summing the Speed
+Traffic <- aggregate(Traffic_all$`Speed [Mbps]` ~ Traffic_all$date, 
+                     data = Traffic_all, sum)
+names(Traffic) <- c("date", "Speed")
+
+
+# Traffic3G <- fread("Data_Traffic_Network_summary_GnGp_IP_Network.csv")
+# Traffic4G <- fread("Data_Traffic_Network_summary_S1_IP_Network.csv")
+
+# Traffic <- inner_join(Traffic3G,Traffic4G, by ="date")[,c(1,3,16)]
+# Traffic <- mutate(Traffic, Speed = Traffic$`Speed [Mbps].x` + Traffic$`Speed [Mbps].y`)
+
+
+
+Traffic_date <- strptime(Traffic$date, "%m/%d/%Y %H:%M:%S")
+
+Traffic_df <- data.table(date = Traffic_date, Speed = Traffic$Speed)
+
+#Traffic_ord <- setorder(Traffic_df, date)[-1,]
+
+Traffic_ord <- Traffic_df
+
+# TRAFFIC ANALYSIS
+Traffic_XTS <- xts(as.numeric(Traffic_ord$Speed), order.by = Traffic_ord$date)
+
+########### FORECAST the MAXIMUM #####################
+Traffic_Max <- apply.daily(Traffic_XTS,max)
+df_Max <- data.frame(Traffic_Max[,1], Time = index(Traffic_Max))
+names(df_Max) <- c("Speed", "Time")
+y <- ts(df_Max$Speed,frequency = 1)
+
+# Remove outliers and last point as it is comuning from incomplete traffic monitoring
+y <- c(y[1:144],y[148:232])
+y <- ts(y,frequency=1)
+
+plot(y)
+```
+
+The above is the raugh plot of the time series that represent the data to be modelled and forecasted. As it represents the traffic peak of Mobile Internet connection of a big Mobile Operator, we expect that the growth follows the edholm's law, saying that the log of data rates against time is linear. http://www.ece.northwestern.edu/~mh/MSIT/edholm.pdf.
+So we proceed to fit a linear regression model of data rate against time.
+
+```{r}
+# Create the model. Mbps are transformed in Gbps
+mod_max_log <- tslm(log(y/1024) ~ trend)
+summary(mod_max_log)
+```
+
+As expected the p-values clearly means that time and traffic speed growth are correlated (reject NULL hypothesis), moreover the std. error od the intercept and trend shows that the Estimate values are good approximation and will be used in the following.
+
+```{r, echo=FALSE}
+# Forecast 90 days
+flog <- forecast(mod_max_log, h = 90, level = c(95,98,99.99))
+
+# Changhe the model so that we can show linear values in the graph
+f <- flog 
+f$mean <- exp(flog$mean)
+for(i in 1:3) {
+f$lower[,i] <- exp(flog$lower[,i])
+f$upper[,i] <- exp(flog$upper[,i])
+}
+f$model$fitted.values <- exp(flog$model$fitted.values)
+f$model$model$`log(y/1024)` <- exp(flog$model$model$`log(y/1024)`)
+
+# Plot the data with 90 days forecast.
+plot.x <- as.numeric(names((fitted(f))))
+plot.y <- exp((fitted(f)))
+
+PFORE <- autoplot((f)) + geom_line(aes(x = plot.x, y = plot.y), col = "blue") +
+                 scale_x_continuous(breaks = c(0:10)*30) + xlab("Time [days]") +
+                 scale_y_continuous(breaks = c(0:30)*10) + ylab("Gbps") +
+                 ggtitle ("Forecast from Linear Regression Model [Gbps]")
+
+
+ggplotly(PFORE)
+
+```
+
+Now let's verify the model against new values recorded after the model was built.
+
+```{r}
+# New Data is available in a new folder
+setwd("./New Data/")
+
+# Apply the same calculation, to obtain the maximum per day
+# List all files 
+GnGP <- list.files(pattern = "GnGp_IP_Network")
+S <- list.files(pattern = "S_IP_Network")
+S1 <- list.files(pattern = "S1_IP_Network")
+S5S8 <- list.files(pattern = "S5_S8_IP_Network")
+
+IP <- list.files(pattern = "_IP_Network")
+
+Traffic_all <- data.frame()
+Tr_names <- names(as.data.frame(fread(IP[1])))
+
+for(i in IP) {
+        
+        temp <- as.data.frame(fread(i))
+        names(temp) <- Tr_names
+ #       l <- list(Traffic_all, temp)
+        Traffic_all <- base::rbind(Traffic_all,temp)
+}
+
+# Summarise by date summing the Speed
+Traffic <- aggregate(Traffic_all$`Speed [Mbps]` ~ Traffic_all$date, 
+                     data = Traffic_all, sum)
+names(Traffic) <- c("date", "Speed")
+
+
+# Traffic3G <- fread("Data_Traffic_Network_summary_GnGp_IP_Network.csv")
+# Traffic4G <- fread("Data_Traffic_Network_summary_S1_IP_Network.csv")
+
+# Traffic <- inner_join(Traffic3G,Traffic4G, by ="date")[,c(1,3,16)]
+# Traffic <- mutate(Traffic, Speed = Traffic$`Speed [Mbps].x` + Traffic$`Speed [Mbps].y`)
+
+
+
+Traffic_date <- strptime(Traffic$date, "%m/%d/%Y %H:%M:%S")
+
+Traffic_df <- data.table(date = Traffic_date, Speed = Traffic$Speed)
+
+#Traffic_ord <- setorder(Traffic_df, date)[-1,]
+
+Traffic_ord <- Traffic_df
+
+# TRAFFIC ANALYSIS
+Traffic_XTS <- xts(as.numeric(Traffic_ord$Speed), order.by = Traffic_ord$date)
+
+########### Calculate the MAXIMUM #####################
+Traffic_Max <- apply.daily(Traffic_XTS,max)
+df_Max <- data.frame(Traffic_Max[,1], Time = index(Traffic_Max))
+names(df_Max) <- c("Speed", "Time")
+# Remove the last point as the recorded value is not complete
+df_Max <- df_Max[1:25,]
+y <- ts(df_Max$Speed,frequency = 1, start = 231) / 1024
+
+ PFORE + geom_line(aes(x=c(231:255), y = y), col = "red")
+
+```
+
+
