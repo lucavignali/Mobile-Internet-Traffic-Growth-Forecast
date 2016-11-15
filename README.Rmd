@@ -1,0 +1,8 @@
+---
+title: "README"
+output: html_document
+---
+
+In this project we explore the Mobile Internet speed growth, anlyzing data from real Mobile Network Operator.
+
+We provide a 3 months forecast and compare with measures.
